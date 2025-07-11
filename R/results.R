@@ -129,11 +129,12 @@ print_settings <- function(settings) {
 ## SAVE RESULTS      ##
 #######################
 save_results <- function(summary, settings, filename = NULL) {
-  dir.create('results', showWarnings = FALSE, recursive = TRUE)
   if (is.null(filename)) {
     timestamp <- format(Sys.time(), '%Y%m%d_%H%M%S')
-    filename <- paste0(settings$model, '_', timestamp)
+    filename <- file.path(tempdir(), paste0(settings$model, '_', timestamp, '.csv'))
+    message("No filename provided. Saving results to temporary file:\n", filename)
   }
+
   out_file <- file.path('results', paste0(filename, '.csv'))
 
   combined <- summary$param_summary

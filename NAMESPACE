@@ -1,4 +1,4 @@
-useDynLib(bayesGT, sample, .registration = FALSE)
+useDynLib(bayesGT, .registration = TRUE)
 
 #bayes_sampler
 export(bayes_sampler)
@@ -15,7 +15,7 @@ export(save_results)
 export(plot_trace)
 export(plot_post_hist)
 
-#mh_wlhs
-#export(wls.mh.alg)
-#export(mt.ct)
-
+# imports
+importFrom(stats, rnorm, runif, rbeta, rbinom, sd, quantile, dnorm)
+importFrom(graphics, par, abline, curve, hist)
+importFrom(utils, write.table)

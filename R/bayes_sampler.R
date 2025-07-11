@@ -1,11 +1,12 @@
 #########################################
 # bayes_sampler.R                       #
 # Author:  Caleb Ives                   #
-# Purpose: Runs Bayesian Gibbs sampler  #
+# Purpose: Runs one replicate of        #
+# the Bayesian Gibbs sampler            #
 #########################################
 
 
-bayes_sampler <- function(beta_init, Z, X, N, S, g, a, R, post_git, known_acc, se_sp){
+bayes_sampler <- function(beta_init, Z, X, N, S, g, rw.sd, post_git, known_acc, se_sp, se_0, sp_0){
   X <- as.matrix(X)
   Yt <- rbinom(N, 1, apply(X %*% beta_init, 2, g))
 
@@ -43,8 +44,8 @@ bayes_sampler <- function(beta_init, Z, X, N, S, g, a, R, post_git, known_acc, s
   if (!known_acc) {
     se_sv <- matrix(NA, post_git, num_assays)
     sp_sv <- matrix(NA, post_git, num_assays)
-    se <- rep(settings$se_0, length.out = num_assays)
-    sp <- rep(settings$sp_0, length.out = num_assays)
+    se <- rep(se_0, length.out = num_assays)
+    sp <- rep(sp_0, length.out = num_assays)
   } else {
     se <- se_sp[, 1]
     sp <- se_sp[, 2]
@@ -81,7 +82,7 @@ bayes_sampler <- function(beta_init, Z, X, N, S, g, a, R, post_git, known_acc, s
     sp_counts <- matrix(res$sp_counts, nrow = 2)
 
     # Sampling beta
-    out <- wls.mh.alg(b0 = beta_init, X = X, y = Ytmat[, 1], a = a, R = R)
+    out <- sample_beta_rw(beta_init, X, Ytmat[, 1], rw.sd)
     beta_init <- out$param
     beta_sv[s, ] <- beta_init
 
@@ -119,6 +120,27 @@ bayes_sampler <- function(beta_init, Z, X, N, S, g, a, R, post_git, known_acc, s
     output$sp <- sp_sv
   }
   return(output)
+}
+
+
+sample_beta_rw <- function(beta0, X, y, rw.sd) {
+  beta.star <- beta0 + rnorm(length(beta0), 0, rw.sd)
+
+  XtB <- X %*% beta0
+  p <- 1 / (1 + exp(-XtB))
+
+  XtB.star <- X %*% beta.star
+  p.star <- 1 / (1 + exp(-XtB.star))
+
+  num <- p.star^y * (1 - p.star)^(1 - y)
+  den <- p^y * (1 - p)^(1 - y)
+  accept <- min(1, prod(num / den))
+
+  if(runif(1) < accept) {
+    return(list(param = beta.star, accept = 1))
+  } else {
+    return(list(param = beta0, accept = 0))
+  }
 }
 
 

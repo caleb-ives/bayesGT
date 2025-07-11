@@ -48,11 +48,12 @@ infer_posterior <- function(test_data, settings) {
     N         = N,
     S         = S,
     g         = settings$g,
-    a         = NULL,
-    R         = NULL,
-    post_git   = settings$post_git,
+    rw.sd     = settings$rw.sd,
+    post_git  = settings$post_git,
     known_acc = settings$known_acc,
-    se_sp     = se_sp
+    se_sp     = se_sp,
+    se_0      = se_0,
+    sp_0      = sp_0
   )
 
   all_samp   <- res$param
@@ -101,7 +102,7 @@ run_replicates <- function(test_data, settings) {
 
   parallel::clusterExport(cl, varlist = c(
     "infer_posterior", "bayes_sampler", "hier.gt.simulation",
-    "wls.mh.alg", "mt.ct", "settings"
+    "sample_beta_rw", "settings"
   ), envir = environment())
 
   sim_list <- parallel::parLapplyLB(cl, test_data, function(d) {

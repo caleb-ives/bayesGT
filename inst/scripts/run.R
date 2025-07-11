@@ -16,18 +16,19 @@ settings <- list(
   model      = "M1",
   beta_true  = NULL,
   psz        = c(5, 1),
-  assay_id   = c(1, 2),
-  se_t       = c(0.95, 0.98),
-  sp_t       = c(0.98, 0.99),
-  known_acc  = FALSE,
+  assay_id   = c(1, 1),
+  se_t       = c(0.95, 0.95),
+  sp_t       = c(0.98, 0.98),
+  known_acc  = TRUE,
   se_0       = 0.9,
   sp_0       = 0.9,
-  nsim       = 2,
+  nsim       = 500,
   post_git   = 6000,
   burn       = 1000,
   alpha      = 0.05,
+  rw.sd      = 0.05,
   g          = stats::plogis,
-  keep_raw   = FALSE
+  keep_raw   = TRUE
 )
 settings$beta_true <- switch(settings$model,
                     "M1" = c(-3, 2),
@@ -71,8 +72,8 @@ res <- run_replicates(test_data, settings)
 print_results(res, settings, digits=2)
 #print_settings(settings)
 
-#plot_trace(res, settings, replicate=2, parameter=1, type="se")
-#plot_post_hist(res, settings, replicate=2, parameter=1, type="se")
+plot_trace(res, settings, replicate=2, parameter=2, type="beta")
+plot_post_hist(res, settings, replicate=2, parameter=2, type="beta")
 
 #save_results(res, settings)
 

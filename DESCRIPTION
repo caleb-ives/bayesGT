@@ -1,14 +1,15 @@
 Package: bayesGT
 Type: Package
 Title: Bayesian Group Testing Estimations with GLMs
-Version: 0.1.0
+Version: 0.2.0
 Author: Caleb Ives
 Maintainer: Caleb Ives <c@leb.contact>
-Description: Tools for Bayesian group testing using generalized linear models
-License: MIT
+Description: Tools for Bayesian group testing using generalized linear models.
+License: MIT + file LICENSE
 Encoding: UTF-8
 LazyData: true
 Imports:
   parallel,
-  mnormt,
-  stats
+  stats,
+  graphics,
+  utils
