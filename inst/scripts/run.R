@@ -129,7 +129,7 @@ res <- run_replicates(settings, test_data)
 print_results(res, digits=4)
 
 # # Saves results to a .csv file:
-# save_results(res, "example")
+ save_results(res, "example")
 
 # Diagnostic plots for single replicate (keep_raw
 # must be true):

@@ -5,6 +5,20 @@
 
 
 #######################
+## FORMAT RUNTIME    ##
+#######################
+format_runtime <- function(seconds) {
+  mins <- floor(seconds / 60)
+  secs <- (seconds %% 60)
+  if (mins > 0) {
+    sprintf("%d min %.1f sec", mins, secs)
+  } else {
+    sprintf("%.1f sec", secs)
+  }
+}
+
+
+#######################
 ## PRINT RESULTS     ##
 #######################
 print_results <- function(results, digits = 4) {
@@ -126,8 +140,10 @@ print_results <- function(results, digits = 4) {
   cat("==========================================\n")
   cat("Runtime Summary\n")
   cat("==========================================\n")
-  cat(sprintf("Total runtime     : %.2f seconds\n", total_runtime))
-  cat(sprintf("Avg per replicate : %.2f seconds\n", avg_runtime))
+  cat(sprintf("Total runtime     : %s\n",
+              format_runtime(total_runtime)))
+  cat(sprintf("Avg per replicate : %s\n",
+              format_runtime(avg_runtime)))
   cat(sprintf("Acceptance rate   : %.1f%%\n", 100 * mean(summary$acceptance)))
   cat("==========================================\n")
 }
@@ -161,7 +177,7 @@ save_results <- function(results, filename = NULL) {
       "MH_Type", "Proposal_SD", "Keep_Raw"
     ),
     Value = c(
-      summary$runtime,
+      sprintf("%s", format_runtime(results$runtime)),
       summary$avg_tests,
       sprintf("%.1f", summary$pct_reduction),
       settings$seed,
