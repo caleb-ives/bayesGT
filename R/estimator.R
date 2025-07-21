@@ -4,261 +4,230 @@
 ################################
 
 
-#########################
-## INFER POSTERIOR     ##
-#########################
-infer_posterior <- function(test_data, settings) {
-  X <- test_data$X
-  Z <- test_data$Z
-  tsts <- test_data$tsts
-
-  N <- nrow(X)
-  S <- length(settings$psz)
-
-  Z <- Z[order(Z[, 5]), ]
-  assay_vec <- Z[, 5]
-  unique_assays <- sort(unique(assay_vec))
-
-  if (settings$known_acc) {
-    se_sp <- Z[, 3:4]
-  } else {
-    n_assays <- length(unique(assay_vec))
-
-    se_0 <- settings$se_0
-    sp_0 <- settings$sp_0
-
-    if (length(se_0) == 1) se_0 <- rep(se_0, n_assays)
-    if (length(sp_0) == 1) sp_0 <- rep(sp_0, n_assays)
-
-    stopifnot(length(se_0) == n_assays, length(sp_0) == n_assays)
-
-    se_sp_init <- cbind(se_0, sp_0)
-
-    se_sp <- cbind(
-      se_sp_init[match(assay_vec, unique(assay_vec)), 1],
-      se_sp_init[match(assay_vec, unique(assay_vec)), 2]
-    )
-  }
-
-  beta_init <- rep(0, length(settings$beta_true))
-  res <- bayes_sampler(
-    beta_init = beta_init,
-    Z         = Z,
-    X         = X,
-    N         = N,
-    S         = S,
-    g         = settings$g,
-    rw.sd     = settings$rw.sd,
-    post_git  = settings$post_git,
-    known_acc = settings$known_acc,
-    se_sp     = se_sp,
-    se_0      = se_0,
-    sp_0      = sp_0
-  )
-
-  all_samp   <- res$param
-  post_samp  <- res$param[-(1:settings$burn), , drop = FALSE]
-  post_means <- colMeans(post_samp)
-  post_sds   <- apply(post_samp, 2, sd)
-
-  P <- length(settings$beta_true)
-  cred_int <- vector("list", P)
-  for (j in 1:P) {
-    cred_int[[j]] <- quantile(post_samp[, j], probs = c(settings$alpha / 2, 1 - settings$alpha / 2))
-  }
-
-  output <- list(
-    beta_mean = post_means,
-    beta_sd   = post_sds,
-    tests     = tsts,
-    cred_int  = cred_int
-  )
-
-  if (settings$keep_raw) {
-    output$beta_all <- all_samp
-    if (!settings$known_acc) {
-      output$se <- res$se
-      output$sp <- res$sp
-    }
-  } else if(!settings$known_acc) {
-    output$se <- res$se[-(1:settings$burn), , drop = FALSE]
-    output$sp <- res$sp[-(1:settings$burn), , drop = FALSE]
-  }
-
-  return(output)
-}
-
-
 #######################
 ## RUN REPLICATES    ##
 #######################
-run_replicates <- function(test_data, settings) {
-  start_time <- Sys.time()
+run_replicates <- function(settings, test_data) {
 
-  cores <- parallel::detectCores(logical=TRUE)
-  cl <- parallel::makeCluster(cores)
+  # Generate unique yet deterministic seeds for reproducibility
+  # Each replicate has a unique seed that is based on the master seed
+  seeds <- (settings$seed + seq_along(test_data)) %% .Machine$integer.max
+  seeds[seeds == 0] <- 1
 
-  #parallel::clusterEvalQ(cl, library(bayesGT))
+  cl <- parallel::makeCluster(parallel::detectCores())
+  on.exit(parallel::stopCluster(cl), add=TRUE)
 
-  parallel::clusterExport(cl, varlist = c(
-    "infer_posterior", "bayes_sampler", "hier.gt.simulation",
-    "sample_beta_rw", "settings"
-  ), envir = environment())
+  runtime <- system.time({
+    replicates <- parallel::parLapplyLB(
+      cl,
+      seq_along(test_data),
+      function(i) {
+        rep_settings <- settings
+        rep_settings$seed <- seeds[i]
+        infer_posterior(rep_settings, test_data[[i]])
+      }
+    )
+  })["elapsed"]
 
-  sim_list <- parallel::parLapplyLB(cl, test_data, function(d) {
-    infer_posterior(d, settings)
-  })
+  summary <- replicate_metrics(replicates)
 
-  parallel::stopCluster(cl)
-
-  beta_means_mat <- t(sapply(sim_list, function(s) s$beta_mean))
-  beta_sds_mat   <- t(sapply(sim_list, function(s) s$beta_sd))
-  tests_vec      <- sapply(sim_list, function(s) s$tests)
-  cred_ints      <- lapply(sim_list, function(s) s$cred_int)
-
-  out <- list(
-    beta_means = beta_means_mat,
-    beta_sds   = beta_sds_mat,
-    tests      = tests_vec,
-    cred_ints  = cred_ints
+  list(
+    settings   = settings,
+    replicates = replicates,
+    summary    = summary,
+    runtime    = as.numeric(runtime)
   )
-
-  if (!settings$known_acc) {
-    out$se_samps <- lapply(sim_list, `[[`, "se")
-    out$sp_samps <- lapply(sim_list, `[[`, "sp")
-  }
-
-  if (settings$keep_raw) {
-    out$beta_raw <- lapply(sim_list, `[[`, "beta_all")
-    if (!settings$known_acc) {
-      out$se_raw   <- lapply(sim_list, `[[`, "se")
-      out$sp_raw   <- lapply(sim_list, `[[`, "sp")
-    }
-  }
-
-  end_time <- Sys.time()
-  out$runtime <- as.numeric(difftime(end_time, start_time, units = "secs"))
-  return(compute_results(out, settings))
 }
 
 
-#######################
-## COMPUTE RESULTS   ##
-#######################
-compute_results <- function(output, settings) {
-  beta_means <- output$beta_means
-  beta_sds   <- output$beta_sds
-  tests      <- output$tests
-  cred_ints  <- output$cred_ints
-  runtime    <- output$runtime
+#########################
+## INFER POSTERIOR     ##
+#########################
+infer_posterior <- function(settings, test_data) {
+  if (!is.null(settings$seed)) set.seed(settings$seed)
+
+  X   <- test_data$X
+  Z   <- test_data$Z[order(test_data$Z[,5]), ]
+  tsts <- test_data$tsts
+
+  assay_vec <- Z[,5]
+  se_sp <- if (settings$known_acc) {
+    Z[,3:4]
+  } else {
+    cbind(settings$se_init[assay_vec],
+          settings$sp_init[assay_vec])
+  }
+
+  runtime <- system.time({
+    sampler_out <- bayes_sampler(
+      settings  = settings,
+      beta_init = numeric(length(settings$beta_true)),
+      Z         = Z,
+      X         = X,
+      se_sp     = se_sp
+    )
+  })["elapsed"]
+
+  post <- sampler_out$param[-seq_len(settings$burn_in), , drop = FALSE]
+
+  beta_mean <- colMeans(post)
+  beta_sd   <- apply(post, 2, sd)
+  ci_mat    <- apply(post, 2, quantile,
+                     probs = c(settings$alpha/2, 1 - settings$alpha/2))
+  cred_int  <- lapply(seq_len(ncol(ci_mat)), function(j) ci_mat[, j])
+
+  acceptance <- sampler_out$accept_rate
+
+  estimates <- list(
+    beta_mean = beta_mean,
+    beta_sd   = beta_sd,
+    cred_int  = cred_int,
+    tests     = tsts
+  )
+
+  raw <- NULL
+  if (settings$keep_raw) {
+    raw <- list(
+      beta_all = sampler_out$param,
+      se       = if (!settings$known_acc) sampler_out$se else NULL,
+      sp       = if (!settings$known_acc) sampler_out$sp else NULL
+    )
+  } else if (!settings$known_acc) {
+    raw <- list(
+      se = sampler_out$se[-seq_len(settings$burn_in), , drop = FALSE],
+      sp = sampler_out$sp[-seq_len(settings$burn_in), , drop = FALSE]
+    )
+  }
+
+  return(list(
+    settings   = settings,
+    estimates  = estimates,
+    acceptance = acceptance,
+    raw        = raw,
+    runtime    = as.numeric(runtime)
+  ))
+}
+
+
+########################
+## REPLICATE METRICS  ##
+########################
+replicate_metrics <- function(replicates) {
+  # Support for passing in a single replicate
+  if ("settings" %in% names(replicates) &&
+      "estimates" %in% names(replicates) &&
+      "acceptance" %in% names(replicates) &&
+      "runtime"   %in% names(replicates)) {
+    replicates <- list(replicates)
+  }
+
+  ## More support for passing in a single replicate
+  if (length(replicates) == 1 && is.null(replicates[[1]]$summary)) {
+    return(list(
+      param_summary = data.frame(
+        Parameter = paste0("beta", seq_along(replicates[[1]]$estimates$beta_mean) - 1L),
+        TrueValue  = replicates[[1]]$settings$beta_true,
+        EstMean    = replicates[[1]]$estimates$beta_mean,
+        Bias       = replicates[[1]]$estimates$beta_mean - replicates[[1]]$settings$beta_true,
+        CP         = mapply(function(ci, true)
+          as.numeric(ci[1] <= true && true <= ci[2]),
+          replicates[[1]]$estimates$cred_int,
+          replicates[[1]]$settings$beta_true),
+        SSD        = NA,
+        ESE        = replicates[[1]]$estimates$beta_sd,
+        stringsAsFactors = FALSE
+      ),
+      acc_summary   = NULL,
+      acceptance    = replicates[[1]]$acceptance,
+      avg_tests     = replicates[[1]]$estimates$tests,
+      pct_reduction = 100 * (1 - replicates[[1]]$estimates$tests / replicates[[1]]$settings$N),
+      runtimes      = c(replicates[[1]]$runtime)
+    ))
+  }
+
+  ## Main function: ##
+
+  settings   <- replicates[[1]]$settings
   beta_true  <- settings$beta_true
   alpha      <- settings$alpha
 
-  beta_est <- colMeans(beta_means)
-  bias     <- beta_est - beta_true
-  ssd      <- apply(beta_means, 2, sd)
-  ese      <- colMeans(beta_sds)
-  avg_tests <- mean(tests)
+  beta_means <- do.call(rbind, lapply(replicates, function(r) r$estimates$beta_mean))
+  beta_sds   <- do.call(rbind, lapply(replicates, function(r) r$estimates$beta_sd))
+  tests      <- vapply(replicates, function(r) r$estimates$tests, numeric(1))
+  runtimes   <- vapply(replicates, function(r) r$runtime,        numeric(1))
+  cred_list  <- lapply(replicates, function(r) r$estimates$cred_int)
+  acceptance <- vapply(replicates, function(r) r$acceptance, numeric(1))
+
+  avg_tests     <- mean(tests)
   pct_reduction <- 100 * (1 - avg_tests / settings$N)
 
-  P <- length(beta_true)
-  nsim <- nrow(beta_means)
-  cp <- numeric(P)
-  for (j in 1:P) {
-    indicators <- numeric(nsim)
-    for (i in 1:nsim) {
-      ci_j <- cred_ints[[i]][[j]]
-      indicators[i] <- is.numeric(ci_j) && length(ci_j) == 2 &&
-        beta_true[j] >= ci_j[1] && beta_true[j] <= ci_j[2]
-    }
-    cp[j] <- mean(indicators, na.rm = TRUE)
-  }
-
+  # Beta parameter performance summary
   param_summary <- data.frame(
-    Parameter   = paste0("beta", seq_along(beta_true) - 1),
-    TrueValue   = beta_true,
-    EstMean     = beta_est,
-    Bias        = bias,
-    CP          = cp,
-    SSD         = ssd,
-    ESE         = ese,
+    Parameter = paste0("beta", seq_along(beta_true) - 1L),
+    TrueValue = beta_true,
+    EstMean   = colMeans(beta_means),
+    Bias      = colMeans(beta_means) - beta_true,
+    CP        = sapply(seq_along(beta_true), function(j) {
+      ci_j <- t(vapply(cred_list,
+                       function(x) x[[j]],
+                       numeric(2)))
+      mean(ci_j[,1] <= beta_true[j] & ci_j[,2] >= beta_true[j])
+    }),
+    SSD = apply(beta_means, 2, sd),
+    ESE = colMeans(beta_sds),
     stringsAsFactors = FALSE
   )
 
-  summary <- list(
-    settings       = settings,
-    runtime        = runtime,
-    avg_tests      = avg_tests,
-    pct_reduction  = pct_reduction,
-    param_summary  = param_summary
-  )
-
-
+  # Accuracy performance
+  acc_summary <- NULL
   if (!settings$known_acc) {
-    if (settings$keep_raw) {
-      se_post <- lapply(output$se_samps, function(m) m[-(1:settings$burn), , drop = FALSE])
-      sp_post <- lapply(output$sp_samps, function(m) m[-(1:settings$burn), , drop = FALSE])
-    } else {
-      se_post <- output$se_samps
-      sp_post <- output$sp_samps
-    }
+    se_chains <- lapply(replicates, function(r) r$raw$se[-seq_len(settings$burn_in), , drop=FALSE])
+    sp_chains <- lapply(replicates, function(r) r$raw$sp[-seq_len(settings$burn_in), , drop=FALSE])
 
-    se_means <- do.call(rbind, lapply(se_post, colMeans))
-    sp_means <- do.call(rbind, lapply(sp_post, colMeans))
-    se_sds   <- do.call(rbind, lapply(se_post, function(m) apply(m, 2, sd)))
-    sp_sds   <- do.call(rbind, lapply(sp_post, function(m) apply(m, 2, sd)))
+    se_means <- do.call(rbind, lapply(se_chains, colMeans))
+    sp_means <- do.call(rbind, lapply(sp_chains, colMeans))
 
     se_post_mean <- colMeans(se_means)
     sp_post_mean <- colMeans(sp_means)
-    se_ese       <- colMeans(se_sds)
-    sp_ese       <- colMeans(sp_sds)
+    se_ese       <- colMeans(do.call(rbind, lapply(se_chains, function(m) apply(m, 2, sd))))
+    sp_ese       <- colMeans(do.call(rbind, lapply(sp_chains, function(m) apply(m, 2, sd))))
 
-    lb <- alpha / 2
-    ub <- 1 - lb
-    se_cp <- sp_cp <- numeric(ncol(se_means))
-    for (j in seq_len(ncol(se_means))) {
-      se_cis <- t(sapply(se_post, function(m) quantile(m[, j], c(lb, ub))))
-      sp_cis <- t(sapply(sp_post, function(m) quantile(m[, j], c(lb, ub))))
-      se_cp[j] <- mean(settings$se_t[j] >= se_cis[, 1] & settings$se_t[j] <= se_cis[, 2])
-      sp_cp[j] <- mean(settings$sp_t[j] >= sp_cis[, 1] & settings$sp_t[j] <= sp_cis[, 2])
-    }
-
-    assay_labels <- colnames(output$se_samps[[1]])
-    assay_ids <- as.integer(gsub("Se_a", "", assay_labels))
-    matched_se_t <- settings$se_t[match(assay_ids, unique(settings$assay_id))]
-    matched_sp_t <- settings$sp_t[match(assay_ids, unique(settings$assay_id))]
-
-    se_bias <- se_post_mean - matched_se_t
-    sp_bias <- sp_post_mean - matched_sp_t
+    lb <- alpha/2; ub <- 1 - lb
+    se_cp <- sapply(seq_along(se_post_mean), function(j) {
+      ci_j <- t(vapply(se_chains, function(m) quantile(m[,j], c(lb, ub)), numeric(2)))
+      mean(ci_j[,1] <= settings$se_true[j] & ci_j[,2] >= settings$se_true[j])
+    })
+    sp_cp <- sapply(seq_along(sp_post_mean), function(j) {
+      ci_j <- t(vapply(sp_chains, function(m) quantile(m[,j], c(lb, ub)), numeric(2)))
+      mean(ci_j[,1] <= settings$sp_true[j] & ci_j[,2] >= settings$sp_true[j])
+    })
 
     acc_summary <- data.frame(
-      Assay    = assay_ids,
-      True_Se  = matched_se_t,
+      Assay    = seq_along(se_post_mean),
+      True_Se  = settings$se_true,
       Est_Se   = se_post_mean,
-      Bias_Se  = se_bias,
+      Bias_Se  = se_post_mean - settings$se_true,
       CP_Se    = se_cp,
       SSD_Se   = apply(se_means, 2, sd),
       ESE_Se   = se_ese,
-      True_Sp  = matched_sp_t,
+      True_Sp  = settings$sp_true,
       Est_Sp   = sp_post_mean,
-      Bias_Sp  = sp_bias,
+      Bias_Sp  = sp_post_mean - settings$sp_true,
       CP_Sp    = sp_cp,
       SSD_Sp   = apply(sp_means, 2, sd),
-      ESE_Sp   = sp_ese
+      ESE_Sp   = sp_ese,
+      stringsAsFactors = FALSE
     )
-
-    summary$acc_summary <- acc_summary
   }
 
-  if (settings$keep_raw) {
-    summary$beta_raw <- output$beta_raw
-    if (!settings$known_acc) {
-      summary$se_raw <- output$se_raw
-      summary$sp_raw <- output$sp_raw
-    }
-  }
-
-  return(summary)
+  return(list(
+    param_summary = param_summary,
+    acc_summary   = acc_summary,
+    acceptance    = acceptance,
+    avg_tests     = avg_tests,
+    pct_reduction = pct_reduction,
+    runtimes      = runtimes
+  ))
 }
 
 

@@ -1,21 +1,20 @@
 useDynLib(bayesGT, .registration = TRUE)
 
-#bayes_sampler
-export(bayes_sampler)
+#settings
+export(create_settings)
 
 #estimator
 export(infer_posterior)
 export(run_replicates)
-export(compute_results)
 
 #results
 export(print_results)
-export(print_settings)
 export(save_results)
-export(plot_trace)
-export(plot_post_hist)
+export(diag_traceplot)
+export(diag_histogram)
+export(diag_beta_grid)
 
 # imports
 importFrom(stats, rnorm, runif, rbeta, rbinom, sd, quantile, dnorm)
 importFrom(graphics, par, abline, curve, hist)
-importFrom(utils, write.table)
+importFrom(utils, write.table, modifyList)

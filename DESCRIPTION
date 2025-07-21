@@ -13,3 +13,5 @@ Imports:
   stats,
   graphics,
   utils
+Roxygen: list(markdown = TRUE)
+URL: https://github.com/caleb-ives/bayesGT

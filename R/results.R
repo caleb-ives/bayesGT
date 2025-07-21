@@ -7,270 +7,236 @@
 #######################
 ## PRINT RESULTS     ##
 #######################
-print_results <- function(summary, settings, digits = 4) {
-  known_acc   <- settings$known_acc
-  runtime     <- summary$runtime
-  avg_tests   <- summary$avg_tests
-  N           <- settings$N
-  model_name  <- settings$model
+print_results <- function(results, digits = 4) {
+  settings <- results$settings
 
-  mins <- floor(runtime / 60)
-  secs <- round(runtime %% 60, 1)
-  pct_reduction <- round(100 * (1 - avg_tests / N), 1)
+  if (is.null(results$summary)) {
+    results$summary <- replicate_metrics(results)
+  }
+  summary  <- results$summary
 
-  param_df <- summary$param_summary
+  master_seed <- results$seed
 
-  if (!known_acc && !is.null(summary$acc_summary)) {
-    acc <- summary$acc_summary
-    acc_rows <- data.frame(
-      Parameter   = c(paste0("Se", acc$Assay - 1), paste0("Sp", acc$Assay)),
-      TrueValue   = c(acc$True_Se, acc$True_Sp),
-      EstMean     = c(acc$Est_Se, acc$Est_Sp),
-      Bias        = c(acc$Bias_Se, acc$Bias_Sp),
-      CP          = c(acc$CP_Se, acc$CP_Sp),
-      SSD         = c(acc$SSD_Se, acc$SSD_Sp),
-      ESE         = c(acc$ESE_Se, acc$ESE_Sp),
-      stringsAsFactors = FALSE
-    )
-    param_df <- rbind(param_df[, names(acc_rows)], acc_rows)
+  nsim       <- length(results$replicates)
+  N          <- settings$N
+  gibbs_iter <- settings$gibbs_iter
+  burn_in    <- settings$burn_in
+  alpha      <- settings$alpha
+  mh_type    <- settings$mh_control$type
+  mh_args    <- settings$mh_control$args
+  keep_raw   <- settings$keep_raw
+  known_acc  <- settings$known_acc
+
+  total_runtime <- results$runtime
+  avg_runtime   <- mean(summary$runtimes)
+
+  ## Configuration table
+  cat("==========================================\n")
+  cat("Configuration Overview\n")
+  cat("==========================================\n")
+
+  ## Session parameters
+  cat(sprintf("Master Seed         : %d\n", master_seed))
+  cat(sprintf("Replicates          : %d\n", settings$nsims))
+  cat(sprintf("Credible level      : %.0f%%\n", 100 * (1 - settings$alpha)))
+  cat(sprintf("Keep Raw Samples    : %s\n", ifelse(settings$keep_raw, "Yes", "No")))
+
+  ## Data structure
+  cat(sprintf("Sample size (N)     : %d\n", settings$N))
+  cat(sprintf("Pool sizes (psz)    : %s\n", paste(settings$psz, collapse = ", ")))
+  cat(sprintf("Assay IDs           : %s\n", paste(settings$assay_id, collapse = ", ")))
+
+  ## True parameters
+  cat(sprintf("Number of betas     : %d\n", length(settings$beta_true)))
+  cat(sprintf("True betas          : %s\n", paste(settings$beta_true, collapse = ", ")))
+  cat(sprintf("True Se             : %s\n", paste(settings$se_true, collapse = ", ")))
+  cat(sprintf("True Sp             : %s\n", paste(settings$sp_true, collapse = ", ")))
+
+  ## Se/Sp estimation
+  cat(sprintf("Known Accuracy      : %s\n", ifelse(settings$known_acc, "Yes", "No")))
+  if (!settings$known_acc) {
+    cat(sprintf("Initial Se          : %s\n", paste(settings$se_init, collapse = ", ")))
+    cat(sprintf("Initial Sp          : %s\n", paste(settings$sp_init, collapse = ", ")))
   }
 
-  EstMean <- round(param_df$EstMean, digits)
-  Bias    <- round(param_df$Bias, digits)
-  SSD     <- round(param_df$SSD, digits)
-  ESE     <- round(param_df$ESE, digits)
-  CP      <- round(param_df$CP, 2)
+  ## Sampling configuration
+  cat(sprintf("Gibbs samples       : %d\n", settings$gibbs_iter))
+  cat(sprintf("Burn-in             : %d\n", settings$burn_in))
+  cat(sprintf("Link function       : %s\n", settings$link_name))
+  cat(sprintf("MH Type             : %s\n", settings$mh_control$type))
+  cat("MH Settings         : ")
+  print(settings$mh_control$args)
 
-  labels <- paste0(param_df$Parameter, " (", param_df$TrueValue, ")")
+  cat("\n")
 
-  est_strs  <- formatC(EstMean, digits = digits, format = "f")
-  bias_strs <- mapply(function(b, cp) {
-    if (is.na(cp)) formatC(b, digits = digits, format = "f")
-    else sprintf(paste0("%.", digits, "f (%0.2f)"), b, cp)
-  }, Bias, CP)
-  ssd_strs <- mapply(function(s, e) {
-    if (is.na(e)) formatC(s, digits = digits, format = "f")
-    else sprintf(paste0("%.", digits, "f (%0.2f)"), s, e)
-  }, SSD, ESE)
+  ## Parameter summary table
+  cat("==========================================\n")
+  cat("Posterior Summary\n")
+  cat("==========================================\n")
 
-  col_width <- max(
-    nchar(labels),
-    nchar(est_strs),
-    nchar(bias_strs),
-    nchar(ssd_strs)
+  df <- summary$param_summary
+  df$TrueValue <- round(df$TrueValue, digits)
+  df$EstMean   <- round(df$EstMean,   digits)
+  df$CP        <- round(df$CP,        2)
+  df$SSD       <- round(df$SSD,       digits)
+  df$ESE       <- round(df$ESE,       digits)
+
+  print_df <- data.frame(
+    Parameter = df$Parameter,
+    True      = df$TrueValue,
+    Estimate  = df$EstMean,
+    CP95      = df$CP,
+    SSD       = df$SSD,
+    ESE       = df$ESE,
+    stringsAsFactors = FALSE
   )
 
-  label_col_width <- 14
+  widths <- mapply(function(col, name) {
+    # Convert NA to empty string for nchar to return 0, then take max with name length
+    # Ensure a minimum width of 1 to avoid invalid 'width' argument
+    max(nchar(as.character(replace(col, is.na(col), ""))), nchar(name), 1)
+  }, as.list(print_df), names(print_df))
 
-  cat("=====================================\n")
-  cat("Model:", model_name, "\n")
-  cat("=====================================\n\n")
-  cat(sprintf("Total runtime: %d min %.1f sec\n", mins, secs))
-  cat(sprintf("Average # of tests: %.1f (%.1f%% reduction)\n", avg_tests, pct_reduction))
-  cat("=====================================\n\n")
+  header   <- paste(
+    mapply(function(name, w) format(name, width = w, justify = "centre"),
+           names(print_df), widths),
+    collapse = " | "
+  )
+  underline <- paste(
+    mapply(function(w) paste(rep("-", w), collapse = ""), widths),
+    collapse = "-|-"
+  )
 
-  header <- sprintf("%-*s", label_col_width, "Parameter")
-  for (label in labels) {
-    header <- paste0(header, " | ", formatC(label, width = col_width, flag = "-"))
-  }
   cat(header, "\n")
-  cat(strrep("-", nchar(header)), "\n")
+  cat(underline, "\n")
 
-  print_row <- function(name, values) {
-    line <- sprintf("%-*s", label_col_width, name)
-    for (val in values) {
-      line <- paste0(line, " | ", formatC(val, width = col_width, flag = "-"))
-    }
+  apply(print_df, 1, function(row) {
+    row <- as.list(row)
+    line <- paste(
+      mapply(function(cell, w) format(cell, width = w, justify = "centre"),
+             row, widths),
+      collapse = " | "
+    )
     cat(line, "\n")
-  }
+  })
+  cat("\n")
+  cat("\n")
 
-  print_row("Est.", est_strs)
-  print_row("Bias (CP95)", bias_strs)
-  print_row("SSD (ESE)", ssd_strs)
-
-  cat(strrep("=", nchar(header)), "\n")
+  ## Runtime summary
+  cat("==========================================\n")
+  cat("Runtime Summary\n")
+  cat("==========================================\n")
+  cat(sprintf("Total runtime     : %.2f seconds\n", total_runtime))
+  cat(sprintf("Avg per replicate : %.2f seconds\n", avg_runtime))
+  cat(sprintf("Acceptance rate   : %.1f%%\n", 100 * mean(summary$acceptance)))
+  cat("==========================================\n")
 }
 
 
 #######################
-## PRINT SETTINGS    ##
+## PRINT RESULTS     ##
 #######################
-print_settings <- function(settings) {
-  cat("\nReproducibility Settings:\n")
-  cat("==========================\n")
+save_results <- function(results, filename = NULL) {
+  settings <- results$settings
+  summary  <- results$summary
 
-  fmt <- "%-20s : %s\n"
-
-  cat(sprintf(fmt, "Seed",               settings$seed))
-  cat(sprintf(fmt, "Sample size",    settings$N))
-  cat(sprintf(fmt, "Simulations", settings$nsim))
-  cat(sprintf(fmt, "Model",              settings$model))
-  cat(sprintf(fmt, "Pool sizes",         paste(settings$psz, collapse = ", ")))
-  cat(sprintf(fmt, "Assay IDs",          paste(settings$assay_id, collapse = ", ")))
-  cat(sprintf(fmt, "Known Accuracy",     ifelse(settings$known_acc, "Yes", "No")))
-
-  cat(sprintf(fmt, "True Se",            paste(settings$se_t, collapse = ", ")))
-  cat(sprintf(fmt, "True Sp",            paste(settings$sp_t, collapse = ", ")))
-
-  if (!settings$known_acc) {
-    cat(sprintf(fmt, "Initial Se",       paste(settings$se_0, collapse = ", ")))
-    cat(sprintf(fmt, "Initial Sp",       paste(settings$sp_0, collapse = ", ")))
+  # Determine output filename
+  if (is.null(filename) || !nzchar(filename)) {
+    timestamp <- format(Sys.time(), "%Y%m%d_%H%M%S")
+    filename <- paste0("bayesGT_results_", timestamp, ".csv")
+  }
+  if (!grepl("\\.csv$", filename, ignore.case = TRUE)) {
+    filename <- paste0(filename, ".csv")
   }
 
-  cat(sprintf(fmt, "Gibbs samples",      settings$post_git))
-  cat(sprintf(fmt, "Burn-in",            settings$burn))
-  cat(sprintf(fmt, "Credible level",     sprintf("%.1f%%", 100 * (1 - settings$alpha))))
+  # Construct metadata table
+  meta <- data.frame(
+    Key = c(
+      "Runtime_sec", "Avg_Tests", "Pct_Reduction",
+      "Seed", "Sample_Size", "Simulations",
+      "Pool_Sizes", "Assay_IDs",
+      "Known_Accuracy", "Initial_Se", "Initial_Sp",
+      "True_Se", "True_Sp",
+      "Gibbs_Samples", "Burn_in", "Credible_Level",
+      "MH_Type", "Proposal_SD", "Keep_Raw"
+    ),
+    Value = c(
+      summary$runtime,
+      summary$avg_tests,
+      sprintf("%.1f", summary$pct_reduction),
+      settings$seed,
+      settings$N,
+      settings$nsims,
+      paste(settings$psz, collapse = ";"),
+      paste(settings$assay_id, collapse = ";"),
+      ifelse(settings$known_acc, "Yes", "No"),
+      if (!settings$known_acc) paste(settings$se_init, collapse = ";") else NA,
+      if (!settings$known_acc) paste(settings$sp_init, collapse = ";") else NA,
+      paste(settings$se_true, collapse = ";"),
+      paste(settings$sp_true, collapse = ";"),
+      settings$gibbs_iter,
+      settings$burn_in,
+      sprintf("%.1f%%", 100 * (1 - settings$alpha)),
+      settings$mh_control$type,
+      settings$mh_control$args$proposal_sd,
+      ifelse(settings$keep_raw, "Yes", "No")
+    ),
+    stringsAsFactors = FALSE
+  )
 
-  cat("==========================\n")
-}
+  # Format posterior parameter summary
+  param_df <- summary$param_summary
+  out_df <- data.frame(
+    Parameter = param_df$Parameter,
+    TrueValue = param_df$TrueValue,
+    Estimate  = param_df$EstMean,
+    Bias      = param_df$Bias,
+    CP95      = param_df$CP,
+    SSD       = param_df$SSD,
+    ESE       = param_df$ESE,
+    stringsAsFactors = FALSE
+  )
 
-
-#######################
-## SAVE RESULTS      ##
-#######################
-save_results <- function(summary, settings, filename = NULL) {
-  if (is.null(filename)) {
-    timestamp <- format(Sys.time(), '%Y%m%d_%H%M%S')
-    filename <- file.path(tempdir(), paste0(settings$model, '_', timestamp, '.csv'))
-    message("No filename provided. Saving results to temporary file:\n", filename)
-  }
-
-  out_file <- file.path('results', paste0(filename, '.csv'))
-
-  combined <- summary$param_summary
-
+  # Add Se/Sp posterior summary if available
   if (!is.null(summary$acc_summary)) {
     acc <- summary$acc_summary
     se_df <- data.frame(
-      Parameter = paste0('Se', acc$Assay),
+      Parameter = paste0("Se", acc$Assay),
       TrueValue = acc$True_Se,
-      EstMean   = acc$Est_Se,
+      Estimate  = acc$Est_Se,
       Bias      = acc$Bias_Se,
-      CP        = acc$CP_Se,
+      CP95      = acc$CP_Se,
       SSD       = acc$SSD_Se,
       ESE       = acc$ESE_Se,
       stringsAsFactors = FALSE
     )
     sp_df <- data.frame(
-      Parameter = paste0('Sp', acc$Assay),
+      Parameter = paste0("Sp", acc$Assay),
       TrueValue = acc$True_Sp,
-      EstMean   = acc$Est_Sp,
+      Estimate  = acc$Est_Sp,
       Bias      = acc$Bias_Sp,
-      CP        = acc$CP_Sp,
+      CP95      = acc$CP_Sp,
       SSD       = acc$SSD_Sp,
       ESE       = acc$ESE_Sp,
       stringsAsFactors = FALSE
     )
-    combined <- rbind(combined, se_df, sp_df)
+    out_df <- rbind(out_df, se_df, sp_df)
   }
 
+  # Write both tables to file
+  con <- file(filename, open = "wt")
+  on.exit(close(con), add = TRUE)
 
-  meta_df <- data.frame(
-    Key = c('Runtime_Sec', 'Avg_Tests', 'Seed', 'Sample_Size',
-            'Simulations', 'Pool_Sizes', 'Assay_IDs', 'Known_Accuracy',
-            'True_Se', 'True_Sp', 'Initial_Se', 'Initial_Sp',
-            'Gibbs_Samples', 'Burn_in', 'Credible_Level'),
-    Value = c(
-      summary$runtime,
-      summary$avg_tests,
-      settings$seed,
-      settings$N,
-      settings$nsim,
-      paste(settings$psz, collapse = ';'),
-      paste(settings$assay_id, collapse = ';'),
-      ifelse(settings$known_acc, 'Yes', 'No'),
-      paste(settings$se_t, collapse = ';'),
-      paste(settings$sp_t, collapse = ';'),
-      if (!settings$known_acc) paste(settings$se_0, collapse = ';') else NA,
-      if (!settings$known_acc) paste(settings$sp_0, collapse = ';') else NA,
-      settings$post_git,
-      settings$burn,
-      sprintf('%.1f%%', 100 * (1 - settings$alpha))
-    ),
-    stringsAsFactors = FALSE
-  )
+  write.table(meta, file = con,
+              sep = ",", row.names = FALSE,
+              col.names = TRUE, quote = TRUE)
+  writeLines("", con)
 
-  write.table(meta_df,
-              file = out_file,
-              sep = ',',
-              row.names = FALSE,
-              col.names = TRUE,
-              quote = FALSE)
+  write.table(out_df, file = con,
+              sep = ",", row.names = FALSE,
+              col.names = TRUE, quote = TRUE)
 
-  write.table('', file = out_file, append = TRUE,
-              col.names = FALSE, row.names = FALSE, quote = FALSE)
-
-  header_line <- paste0(names(combined), collapse = ',')
-  write(header_line, file = out_file, append = TRUE)
-  write.table(combined,
-              file = out_file,
-              sep = ',',
-              row.names = FALSE,
-              col.names = FALSE,
-              append = TRUE,
-              quote = TRUE)
+  message("Results written to: ", normalizePath(filename))
 }
-
-
-########################
-##  DIAGNOSTIC PLOTS  ##
-########################
-plot_trace <- function(results, settings, replicate = 1, parameter = 1, type = c("beta","se","sp")) {
-  if (!settings$keep_raw) {
-    stop("Trace and posterior plots require settings$keep_raw = TRUE.")
-  }
-
-  type <- match.arg(type)
-  raw  <- switch(type,
-                 beta = results$beta_raw,
-                 se   = results$se_raw,
-                 sp   = results$sp_raw)
-  chain <- raw[[replicate]][, parameter]
-  burn  <- settings$burn
-
-  param_label <- switch(type,
-                        beta = paste0("beta_", parameter - 1),
-                        se   = paste0("Se_",    parameter),
-                        sp   = paste0("Sp_",    parameter))
-
-  oldpar <- par(mar = c(4,4,2,1))
-  plot(chain,
-       type = "l",
-       col  = "steelblue",
-       lwd  = 1.5,
-       xlab = "Iteration",
-       ylab = "Value",
-       main = sprintf("Traceplot: %s (Replication %d)",
-                      param_label, replicate))
-  abline(v = burn, col = "red", lty = 2, lwd = 1.5)
-  par(oldpar)
-}
-
-plot_post_hist <- function(results, settings, replicate = 1, parameter = 1, type = c("beta","se","sp"), breaks = 30) {
-  if (!settings$keep_raw) {
-    stop("Trace and posterior plots require settings$keep_raw = TRUE.")
-  }
-
-  type <- match.arg(type)
-  raw  <- switch(type,
-                 beta = results$beta_raw,
-                 se   = results$se_raw,
-                 sp   = results$sp_raw)
-  chain <- raw[[replicate]][-(1:settings$burn), parameter]
-
-  oldpar <- par(mar = c(4,4,2,1))
-  hist(chain, breaks = breaks, freq = FALSE,
-       col    = "steelblue", border = "black",
-       xlab   = "Value",
-       ylab   = "Density",
-       main   = sprintf("Histogram: %s (Replication %d)",
-                        switch(type,
-                               beta = paste0("beta_", parameter-1),
-                               se   = paste0("Se_",   parameter),
-                               sp   = paste0("Sp_",   parameter)),
-                        replicate))
-  par(oldpar)
-}
-
 
 ## END OF FILE ##

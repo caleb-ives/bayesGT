@@ -6,113 +6,123 @@
 #########################################
 
 
-bayes_sampler <- function(beta_init, Z, X, N, S, g, rw.sd, post_git, known_acc, se_sp, se_0, sp_0){
-  X <- as.matrix(X)
-  Yt <- rbinom(N, 1, apply(X %*% beta_init, 2, g))
+bayes_sampler <- function(settings, beta_init, Z, X, se_sp){
+  N          <- settings$N
+  S          <- length(settings$psz)
+  link_fcn   <- settings$link_fcn
+  rw.sd      <- settings$mh_control$args$proposal_sd
+  post_git   <- settings$gibbs_iter
+  known_acc  <- settings$known_acc
+  se_0       <- settings$se_init
+  sp_0       <- settings$sp_init
+
+  mh <- switch(
+    settings$mh_control$type,
+    rw          = random_walk,
+    rw_adaptive = random_walk_adaptive,
+    wls         = weighted_least_squares
+  )
+
+  X  <- as.matrix(X)
+  Yt <- rbinom(N, 1, link_fcn(X %*% beta_init))
 
   # Sort and extract assay info
-  Z <- Z[order(Z[,5]), ]
-  assay_vec <- Z[, 5]
+  Z             <- Z[order(Z[,5]), ]
+  assay_vec     <- Z[,5]
   unique_assays <- sort(unique(assay_vec))
-  num_assays <- length(unique_assays)
+  num_assays    <- length(unique_assays)
 
-  # Construct Y-til matrix
+  # Construct Y‑til matrix
   tmp <- Z[, -(1:5)]
   ytm <- matrix(-9L, N, S)
-  for (d in 1:N) {
+  for (d in seq_len(N)) {
     idx <- which(tmp == d, arr.ind = TRUE)[, "row"]
-    if (length(idx) > 0) {
-      ytm[d, 1:length(idx)] <- sort(idx)
-    }
+    if (length(idx) > 0) ytm[d, seq_along(idx)] <- sort(idx)
   }
-  Ytmat <- cbind(Yt, rowSums(ytm > 0), ytm)
+  Ytmat <- cbind(
+    Yt,
+    rowSums(ytm > 0),
+    ytm
+  )
   Ycol <- ncol(Ytmat)
 
-  # Store necessary Z data
-  Z <- Z[ ,-(3:5)]
-  Zrow <- nrow(Z)
-  Zcol <- ncol(Z)
+  # Prepare Fortran inputs
+  Z_obs     <- Z[, -(3:5)]
+  Zrow      <- nrow(Z_obs)
+  Zcol      <- ncol(Z_obs)
+  Ztil_out  <- integer(Zrow * Zcol)
+  se_out    <- integer(2L * num_assays)
+  sp_out    <- integer(2L * num_assays)
+  U_all     <- matrix(runif(N * post_git), nrow = N, ncol = post_git)
+  assay_map <- match(assay_vec, unique_assays)
 
-  Ztil_out <- integer(Zrow * Zcol)
-  se_out   <- integer(2L * num_assays)
-  sp_out   <- integer(2L * num_assays)
-
-
-  accept <- rep(-9, post_git)
-  beta_sv <- matrix(-9, post_git, length(beta_init))
+  # Pre-allocate
+  beta_sv <- matrix(NA_real_, nrow = post_git, ncol = length(beta_init))
+  accept  <- integer(post_git)
 
   if (!known_acc) {
-    se_sv <- matrix(NA, post_git, num_assays)
-    sp_sv <- matrix(NA, post_git, num_assays)
-    se <- rep(se_0, length.out = num_assays)
-    sp <- rep(sp_0, length.out = num_assays)
+    se_sv <- matrix(NA_real_, nrow = post_git, ncol = num_assays)
+    sp_sv <- matrix(NA_real_, nrow = post_git, ncol = num_assays)
+    se    <- rep(se_0, length.out = num_assays)
+    sp    <- rep(sp_0, length.out = num_assays)
   } else {
-    se <- se_sp[, 1]
-    sp <- se_sp[, 2]
+    se <- se_sp[,1]
+    sp <- se_sp[,2]
   }
 
-  U_all <- matrix(runif(N * post_git), nrow = N, ncol = post_git)
-  assay_map <- match(assay_vec, unique_assays)
-  se_sp <- matrix(NA_real_, nrow = length(assay_vec), ncol = 2)
 
   # Begin Gibbs sampling:
   for (s in 1:post_git) {
-    pvec <- g(drop(X %*% beta_init))
+    # --- Sample Ytil
     res <- .Fortran("sample",
-              p            = as.double(pvec),
-              Ytmat        = as.integer(Ytmat),
-              Z_mat        = as.integer(Z),
-              N            = as.integer(N),
-              Ycols        = as.integer(Ycol),
-              Zrows        = as.integer(Zrow),
-              Zcols        = as.integer(Zcol),
-              U            = as.double(U_all[, s]),
-              Ztil         = as.integer(Ztil_out),
-              assay_vec    = as.integer(assay_vec),
-              L            = as.integer(num_assays),
-              se_in        = as.double(se),
-              sp_in        = as.double(sp),
-              se_counts    = as.integer(se_out),
-              sp_counts    = as.integer(sp_out)
+                    p         = as.double(link_fcn(X %*% beta_init)),
+                    Ytmat     = as.integer(Ytmat),
+                    Z_mat     = as.integer(Z_obs),
+                    N         = as.integer(N),
+                    Ycols     = as.integer(Ycol),
+                    Zrows     = as.integer(Zrow),
+                    Zcols     = as.integer(Zcol),
+                    U         = as.double(U_all[, s]),
+                    Ztil      = as.integer(Ztil_out),
+                    assay_vec = as.integer(assay_vec),
+                    L         = as.integer(num_assays),
+                    se_in     = as.double(se),
+                    sp_in     = as.double(sp),
+                    se_counts = as.integer(se_out),
+                    sp_counts = as.integer(sp_out)
     )
     Ytmat     <- matrix(res$Ytmat, N, Ycol)
-    Ztil      <- matrix(res$Ztil, Zrow, Zcol)
-
     se_counts <- matrix(res$se_counts, nrow = 2)
     sp_counts <- matrix(res$sp_counts, nrow = 2)
 
-    # Sampling beta
-    out <- sample_beta_rw(beta_init, X, Ytmat[, 1], rw.sd)
-    beta_init <- out$param
-    beta_sv[s, ] <- beta_init
+    # --- Sample beta
+    mh_out        <- mh(beta_init, X, Ytmat[,1], rw.sd, link_fcn)
+    beta_init     <- mh_out$param
+    beta_sv[s, ]  <- beta_init
+    accept[s]     <- mh_out$accept
 
-    # Sampling Se & Sp:
+    # Gibbs sampling for Se/Sp
     if (!known_acc) {
-      a_se0 <- b_se0 <- a_sp0 <- b_sp0 <- 1
-      se <- sp <- numeric(num_assays)
-
-      for (asy in seq_len(num_assays)) {
-        tp <- se_counts[1, asy]
-        fn <- se_counts[2, asy]
-        tn <- sp_counts[1, asy]
-        fp <- sp_counts[2, asy]
-
-        se[asy] <- rbeta(1, a_se0 + tp, b_se0 + fn)
-        sp[asy] <- rbeta(1, a_sp0 + tn, b_sp0 + fp)
+      for (a in seq_len(num_assays)) {
+        tp <- se_counts[1, a]; fn <- se_counts[2, a]
+        tn <- sp_counts[1, a]; fp <- sp_counts[2, a]
+        se[a] <- rbeta(1, 1 + tp, 1 + fn)
+        sp[a] <- rbeta(1, 1 + tn, 1 + fp)
       }
-
       se_sv[s, ] <- se
       sp_sv[s, ] <- sp
-      se_sp[, 1] <- se[assay_map]
-      se_sp[, 2] <- sp[assay_map]
+      se_sp[,1]  <- se[assay_map]
+      se_sp[,2]  <- sp[assay_map]
     }
 
-
-    # Track acceptance in the MH algorithm:
-    accept[s] <- out$accept
   }
 
-  output <- list(param = beta_sv, convergence = 0, accept = accept)
+  output <- list(
+    param       = beta_sv,
+    convergence = 0,
+    accept      = accept,
+    accept_rate = mean(accept)
+  )
   if (!known_acc) {
     colnames(se_sv) <- paste0("Se_a", unique_assays)
     colnames(sp_sv) <- paste0("Sp_a", unique_assays)
@@ -120,27 +130,6 @@ bayes_sampler <- function(beta_init, Z, X, N, S, g, rw.sd, post_git, known_acc, 
     output$sp <- sp_sv
   }
   return(output)
-}
-
-
-sample_beta_rw <- function(beta0, X, y, rw.sd) {
-  beta.star <- beta0 + rnorm(length(beta0), 0, rw.sd)
-
-  XtB <- X %*% beta0
-  p <- 1 / (1 + exp(-XtB))
-
-  XtB.star <- X %*% beta.star
-  p.star <- 1 / (1 + exp(-XtB.star))
-
-  num <- p.star^y * (1 - p.star)^(1 - y)
-  den <- p^y * (1 - p)^(1 - y)
-  accept <- min(1, prod(num / den))
-
-  if(runif(1) < accept) {
-    return(list(param = beta.star, accept = 1))
-  } else {
-    return(list(param = beta0, accept = 0))
-  }
 }
 
 
