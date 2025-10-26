@@ -54,7 +54,7 @@ glmLink <- function(fn.name=c("logit","probit","cloglog")){
 
 settings <- create_settings(list(
   ## Data structure
-  N         = 5000,
+  N         = 15000,
   psz       = c(5, 1),
   assay_id  = c(1, 2),
 
@@ -73,12 +73,12 @@ settings <- create_settings(list(
   burn_in    = 1000,
   mh_control = list(
     type = "rw",
-    args = list(proposal_sd = 0.05)
+    args = list(proposal_sd = 0.035)
   ),
   link_fcn = glmLink("probit")$g,
 
   ## Session parameters
-  nsims     = 5,
+  nsims     = 100,
   seed      = 123456,
   alpha     = 0.05,
   keep_raw  = TRUE
@@ -129,13 +129,14 @@ res <- run_replicates(settings, test_data)
 print_results(res, digits=4)
 
 # # Saves results to a .csv file:
- save_results(res, "example")
+ #save_results(res, "example")
 
 # Diagnostic plots for single replicate (keep_raw
 # must be true):
-diag_histogram(res, name = "beta0", replicate = 2)
-diag_beta_grid(res, replicate = 2)
-
+diag_acf(res, name="beta1", replicate = 3)
+diag_traceplot(res, name="beta1", replicate = 3)
+diag_histogram(res, name = "beta1", replicate = 3)
+#diag_beta_grid(res, replicate = 3)
 
 # # This commented-out code is used to run a single
 # # replicate rather than multiple via parallel computing.

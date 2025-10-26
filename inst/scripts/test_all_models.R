@@ -32,7 +32,7 @@ glmLink <- function(fn.name=c("logit","probit","cloglog")) {
 #################
 BASE_SEED  <- 123
 BASE_N     <- 5000
-BASE_NSIM  <- 500
+BASE_NSIM  <- 10
 BASE_PSZ   <- c(5, 1)
 BASE_BURN  <- 1000
 BASE_ITER  <- 6000
@@ -40,7 +40,8 @@ BASE_ALPHA <- 0.05
 BASE_SE0   <- 0.9
 BASE_SP0   <- 0.9
 BASE_RWSD  <- 0.05
-LINKS      <- c("logit", "probit", "cloglog")
+#LINKS      <- c("logit", "probit", "cloglog")
+LINKS      <- c("probit", "cloglog")
 
 model_defs <- list(
   M1 = c(-3, 2),

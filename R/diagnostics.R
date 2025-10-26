@@ -19,6 +19,45 @@
   stop('Unknown parameter name: ', name)
 }
 
+# Auto-correlation Function Plot
+diag_acf <- function(results, name, replicate = 1, main = NULL, ...) {
+  if (!results$settings$keep_raw) {
+    stop("ACF plots require settings$keep_raw = TRUE.")
+  }
+
+  pinfo <- .parse_name(name)
+  rep_obj <- results$replicates[[replicate]]
+  burn <- rep_obj$settings$burn_in
+
+  chain <- switch(pinfo$type,
+                  beta = {
+                    if (is.null(rep_obj$raw$beta_all)) stop("No beta samples stored.")
+                    rep_obj$raw$beta_all[, pinfo$j]
+                  },
+                  se = {
+                    if (rep_obj$settings$known_acc) stop("SE not estimated when known_acc = TRUE.")
+                    if (is.null(rep_obj$raw$se)) stop("No se samples stored.")
+                    rep_obj$raw$se[, pinfo$j]
+                  },
+                  sp = {
+                    if (rep_obj$settings$known_acc) stop("SP not estimated when known_acc = TRUE.")
+                    if (is.null(rep_obj$raw$sp)) stop("No sp samples stored.")
+                    rep_obj$raw$sp[, pinfo$j]
+                  },
+                  stop("Unknown parameter type.")
+  )
+
+  post <- chain[-seq_len(burn)]
+
+  if (is.null(main)) {
+    main <- sprintf("ACF: %s (Replication %d)", name, replicate)
+  }
+
+  oldpar <- par(mar = c(4, 4, 2, 1)); on.exit(par(oldpar))
+  acf(post, main = main, ...)
+  invisible(post)
+}
+
 # Traceplot with burn-in marker
 diag_traceplot <- function(results, name, replicate = 1, main = NULL, ...) {
   if (!results$settings$keep_raw) {

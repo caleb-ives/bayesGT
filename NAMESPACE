@@ -10,6 +10,7 @@ export(run_replicates)
 #results
 export(print_results)
 export(save_results)
+export(diag_acf)
 export(diag_traceplot)
 export(diag_histogram)
 export(diag_beta_grid)
